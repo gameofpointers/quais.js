@@ -16,6 +16,13 @@ function fromHex(hex: string): string {
     return decoder.decode(data);
 }
 
+function tamperBase58(value: string): string {
+    const base58Chars = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz';
+    const lastChar = value[value.length - 1];
+    const replacement = base58Chars[(base58Chars.indexOf(lastChar) + 1) % base58Chars.length];
+    return value.slice(0, -1) + replacement;
+}
+
 type Test = {
     phrase: string;
     password: string;
@@ -153,4 +160,12 @@ describe('Test HDWallets', function () {
             }
         });
     }
+
+    it('rejects extended keys with invalid Base58Check checksums', function () {
+        const [{ test }] = checks;
+        const { xpriv, xpub } = test.nodes[0];
+
+        assert.throws(() => HDNodeWallet.fromExtendedKey(tamperBase58(xpriv)), /invalid extended key/);
+        assert.throws(() => HDNodeWallet.fromExtendedKey(tamperBase58(xpub)), /invalid extended key/);
+    });
 });

@@ -609,7 +609,7 @@ export class HDNodeWallet extends BaseWallet {
         const bytes = toBeArray(decodeBase58(extendedKey)); // @TODO: redact
 
         assertArgument(
-            bytes.length === 82 || encodeBase58Check(bytes.slice(0, 78)) === extendedKey,
+            bytes.length === 82 && encodeBase58Check(bytes.slice(0, 78)) === extendedKey,
             'invalid extended key',
             'extendedKey',
             '[ REDACTED ]',
