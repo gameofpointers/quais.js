@@ -77,7 +77,7 @@ export class QuaiHDWallet extends AbstractHDWallet<NeuteredAddressInfo> {
      * @returns {string} The extended public key.
      */
     public xPub(): string {
-        return this._root.extendedKey;
+        return this._root.neuter().extendedKey;
     }
 
     /**

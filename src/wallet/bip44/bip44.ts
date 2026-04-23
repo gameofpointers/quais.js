@@ -50,7 +50,7 @@ export class BIP44 {
      * @returns {string} The extended public key.
      */
     get xPub(): string {
-        return this._root.extendedKey;
+        return this._root.neuter().extendedKey;
     }
 
     /**
