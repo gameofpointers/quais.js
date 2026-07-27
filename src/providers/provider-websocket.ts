@@ -127,16 +127,20 @@ export class WebSocketProvider extends SocketProvider {
                 await this._start();
                 this.resume();
                 this.readyMap.set(shard, true);
-                try {
-                    const zone = toZone(shard);
-                    this.provider.startZoneSubscriptions(zone);
-                } catch (error) {
-                    // Intentionally left empty. Will catch if shard is prime or region, which isn't a zone
+                const zone = (() => {
+                    try {
+                        return toZone(shard);
+                    } catch {
+                        return null;
+                    }
+                })();
+                if (zone != null) {
+                    await this.provider.startZoneSubscriptions(zone);
                 }
             } catch (error) {
                 console.log('failed to start WebsocketProvider', error);
                 this.readyMap.set(shard, false);
-                // @TODO: now what? Attempt reconnect?
+                websocket.close();
             }
         };
 

@@ -214,7 +214,7 @@ export interface Subscriber {
     /**
      * Called initially when a subscriber is added the first time.
      */
-    start(): void;
+    start(): void | Promise<void>;
 
     /**
      * Called when there are no more subscribers to the event.
@@ -282,6 +282,7 @@ type Sub = {
     // @todo get rid of this, as it is (and has to be)
     // tracked in subscriber
     started: boolean;
+    startPromise: null | Promise<void>;
     subscriber: Subscriber;
     zone: Zone;
 };
@@ -2226,42 +2227,75 @@ export class AbstractProvider<C = FetchRequest> implements Provider {
             return this.getTransactionReceipt(hash);
         }
 
-        // eslint-disable-next-line no-async-promise-executor
-        return new Promise(async (resolve, reject) => {
+        return new Promise((resolve, reject) => {
             let timer: null | Timer = null;
+            let done = false;
+
+            const stop = () => {
+                if (timer) {
+                    clearTimeout(timer);
+                    timer = null;
+                }
+                void this.off('block', listener, zone).catch(() => {});
+            };
+
+            const fail = (error: unknown) => {
+                if (done) {
+                    return;
+                }
+                done = true;
+                stop();
+                reject(error);
+            };
 
             const listener = async (blockNumber: number) => {
+                if (done) {
+                    return;
+                }
                 try {
                     const receipt = await this.getTransactionReceipt(hash);
+                    if (done) {
+                        return;
+                    }
                     if (receipt != null) {
                         if (blockNumber - receipt.blockNumber + 1 >= confirms) {
+                            done = true;
+                            stop();
                             resolve(receipt);
-                            //this.off("block", listener);
-                            if (timer) {
-                                clearTimeout(timer);
-                                timer = null;
-                            }
                             return;
                         }
                     }
                 } catch (error) {
                     console.log('Error occured while waiting for transaction:', error);
                 }
-                this.once('block', listener, zone);
+                if (done) {
+                    return;
+                }
+                try {
+                    await this.once('block', listener, zone);
+                } catch (error) {
+                    fail(error);
+                }
             };
 
             if (timeout != null) {
                 timer = setTimeout(() => {
-                    if (timer == null) {
+                    if (done) {
                         return;
                     }
+                    done = true;
                     timer = null;
-                    this.off('block', listener, zone);
-                    reject(makeError('timeout', 'TIMEOUT', { reason: 'timeout' }));
+                    void this.off('block', listener, zone).catch(() => {});
+                    reject(
+                        makeError('timeout', 'TIMEOUT', {
+                            reason: 'timeout',
+                            operation: 'waitForTransaction',
+                        }),
+                    );
                 }, timeout);
             }
 
-            listener(await this.getBlockNumber(toShard(zone)));
+            void this.getBlockNumber(toShard(zone)).then(listener).catch(fail);
         });
     }
 
@@ -2416,45 +2450,85 @@ export class AbstractProvider<C = FetchRequest> implements Provider {
 
             const addressableMap = new WeakMap();
             const nameMap = new Map();
-            sub = { subscriber, tag, addressableMap, nameMap, started: false, listeners: [], zone: subscription.zone! };
+            sub = {
+                subscriber,
+                tag,
+                addressableMap,
+                nameMap,
+                started: false,
+                startPromise: null,
+                listeners: [],
+                zone: subscription.zone!,
+            };
             this.#subs.set(tag, sub);
         }
 
         return sub;
     }
 
-    async startZoneSubscriptions(zone: Zone): Promise<void> {
-        for (const sub of Array.from(this.#subs.values())) {
-            if (sub.zone === zone) {
-                if (sub.started) {
-                    await sub.subscriber.start();
+    async #startSub(sub: Sub): Promise<void> {
+        if (sub.started) {
+            return;
+        }
+
+        if (sub.startPromise == null) {
+            const startPromise = (async () => {
+                await sub.subscriber.start();
+                sub.started = true;
+                if (this.#pausedState != null) {
+                    sub.subscriber.pause(this.#pausedState);
                 }
-            }
+            })();
+            sub.startPromise = startPromise.finally(() => {
+                sub.startPromise = null;
+            });
+        }
+
+        await sub.startPromise;
+    }
+
+    async startZoneSubscriptions(zone: Zone): Promise<void> {
+        const results = await Promise.allSettled(
+            Array.from(this.#subs.values())
+                .filter((sub) => sub.zone === zone && sub.started)
+                .map(async (sub) => {
+                    await sub.subscriber.start();
+                }),
+        );
+        const failed = results.find((result): result is PromiseRejectedResult => result.status === 'rejected');
+        if (failed) {
+            throw failed.reason;
         }
     }
 
     async on(event: ProviderEvent, listener: Listener, zone?: Zone): Promise<this> {
         const sub = await this.#getSub(event, zone);
-        sub.listeners.push({ listener, once: false });
-        if (!sub.started) {
-            sub.subscriber.start();
-            sub.started = true;
-            if (this.#pausedState != null) {
-                sub.subscriber.pause(this.#pausedState);
+        const record = { listener, once: false };
+        sub.listeners.push(record);
+        try {
+            await this.#startSub(sub);
+        } catch (error) {
+            sub.listeners = sub.listeners.filter((item) => item !== record);
+            if (sub.listeners.length === 0) {
+                this.#subs.delete(sub.tag);
             }
+            throw error;
         }
         return this;
     }
 
     async once(event: ProviderEvent, listener: Listener, zone?: Zone): Promise<this> {
         const sub = await this.#getSub(event, zone);
-        sub.listeners.push({ listener, once: true });
-        if (!sub.started) {
-            sub.subscriber.start();
-            sub.started = true;
-            if (this.#pausedState != null) {
-                sub.subscriber.pause(this.#pausedState);
+        const record = { listener, once: true };
+        sub.listeners.push(record);
+        try {
+            await this.#startSub(sub);
+        } catch (error) {
+            sub.listeners = sub.listeners.filter((item) => item !== record);
+            if (sub.listeners.length === 0) {
+                this.#subs.delete(sub.tag);
             }
+            throw error;
         }
         return this;
     }

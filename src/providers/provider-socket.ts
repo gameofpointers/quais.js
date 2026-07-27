@@ -73,11 +73,12 @@ export class SocketSubscriber implements Subscriber {
     /**
      * Start the subscriber.
      */
-    start(): void {
+    async start(): Promise<void> {
         this.#filterId = this.#provider.send('quai_subscribe', this.filter, this.shard).then((filterId) => {
             this.#provider._register(filterId, this);
             return filterId;
         });
+        await this.#filterId;
     }
 
     /**
