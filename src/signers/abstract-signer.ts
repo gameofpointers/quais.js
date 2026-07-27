@@ -110,9 +110,8 @@ export abstract class AbstractSigner<P extends null | Provider = null | Provider
             pop.type = getTxType(pop.from ?? null, pop.to ?? null);
         }
 
-        if (pop.nonce == null || pop.nonce === 0) {
-            pop.nonce = await this.getNonce('pending');
-        }
+        const noncePromise =
+            pop.nonce == null || pop.nonce === 0 ? this.getNonce('pending') : Promise.resolve(pop.nonce);
 
         // Populate the chain ID
         const network = await (<Provider>this.provider).getNetwork();
@@ -129,39 +128,45 @@ export abstract class AbstractSigner<P extends null | Provider = null | Provider
             chainId: pop.chainId,
             type: pop.type,
             from: pop.from,
-            nonce: pop.nonce,
         };
+        if (pop.nonce != null && pop.nonce !== 0) baseTx.nonce = pop.nonce;
         if (pop.to) baseTx.to = pop.to;
         if (pop.data) baseTx.data = pop.data;
         if (pop.value) baseTx.value = pop.value;
+        if (pop.gasPrice != null) baseTx.gasPrice = pop.gasPrice;
 
-        if (pop.gasLimit == null || pop.gasLimit === 0n) {
+        const gasLimitPromise = (async () => {
+            if (pop.gasLimit != null && pop.gasLimit !== 0n) return pop.gasLimit;
             if (pop.type == 0) {
-                pop.gasLimit = await this.estimateGas(baseTx as unknown as TransactionRequest);
-            } else {
-                //Special cases for type 2 tx to bypass address out of scope in the node
-                baseTx.to = '0x0000000000000000000000000000000000000000';
-                pop.gasLimit = getBigInt(2 * Number(await this.estimateGas(baseTx as unknown as TransactionRequest)));
-                baseTx.to = pop.to;
+                return await this.estimateGas(baseTx as unknown as TransactionRequest);
             }
-        }
 
-        if (pop.gasPrice == null) {
+            // Special case for type 2 tx to bypass address out of scope in the node.
+            const estimationTx = {
+                ...baseTx,
+                to: '0x0000000000000000000000000000000000000000',
+            };
+            return getBigInt(2 * Number(await this.estimateGas(estimationTx as unknown as TransactionRequest)));
+        })();
+
+        const gasPricePromise = (async () => {
+            if (pop.gasPrice != null) return pop.gasPrice;
             const feeData = await provider.getFeeData(zone, true);
+            return feeData.gasPrice;
+        })();
 
-            if (pop.gasPrice == null) {
-                pop.gasPrice = feeData.gasPrice;
-            }
-        }
-        if (pop.data && pop.data !== '0x') {
-            if (tx.accessList) {
-                pop.accessList = tx.accessList;
-            } else {
-                pop.accessList = await this.createAccessList(baseTx as unknown as QuaiTransactionRequest);
-            }
-        }
-        //@TOOD: Don't await all over the place; save them up for
-        // the end for better batching
+        const accessListPromise =
+            pop.data && pop.data !== '0x' && !tx.accessList
+                ? this.createAccessList(baseTx as unknown as QuaiTransactionRequest)
+                : Promise.resolve(tx.accessList);
+
+        [pop.nonce, pop.gasLimit, pop.gasPrice, pop.accessList] = await Promise.all([
+            noncePromise,
+            gasLimitPromise,
+            gasPricePromise,
+            accessListPromise,
+        ]);
+
         return await resolveProperties(pop);
     }
 

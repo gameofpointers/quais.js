@@ -884,25 +884,8 @@ export abstract class JsonRpcApiProvider<C = FetchRequest> extends AbstractProvi
      * @throws {Error} If the request fails.
      */
     async _perform(req: PerformActionRequest): Promise<any> {
-        // Legacy networks do not like the type field being passed along (which
-        // is fair), so we delete type if it is 0 and a non-EIP-1559 network
         if (req.method !== 'getRunningLocations') {
             await this.initPromise;
-        }
-        if (req.method === 'call' || req.method === 'estimateGas') {
-            const tx = req.transaction;
-            if (tx && tx.type != null && getBigInt(tx.type)) {
-                // If there are no EIP-1559 properties, it might be non-EIP-a559
-                if (tx.gasPrice == null) {
-                    const feeData = await this.getFeeData(req.zone, tx.type === 1);
-                    if (feeData.gasPrice == null) {
-                        // Network doesn't know about EIP-1559 (and hence type)
-                        req = Object.assign({}, req, {
-                            transaction: Object.assign({}, tx, { type: undefined }),
-                        });
-                    }
-                }
-            }
         }
 
         const request = this.getRpcRequest(req);
