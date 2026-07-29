@@ -1911,8 +1911,11 @@ export class AbstractProvider<C = FetchRequest> implements Provider {
     async broadcastTransaction(zone: Zone, signedTx: string): Promise<TransactionResponse> {
         const type = decodeProtoTransaction(getBytes(signedTx)).type;
         try {
-            const { blockNumber, hash, network } = await resolveProperties({
-                blockNumber: this.getBlockNumber(toShard(zone)),
+            // Quai transaction replacement detection must begin at broadcast
+            // time. Qi transactions do not use nonce-based replacement
+            // detection, so they can skip this lookup entirely.
+            const blockNumber = type === 2 ? -1 : await this.getBlockNumber(toShard(zone));
+            const { hash, network } = await resolveProperties({
                 hash: this._perform({
                     method: 'broadcastTransaction',
                     signedTransaction: signedTx,
